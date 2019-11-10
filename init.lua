@@ -45,13 +45,6 @@ os.loadAPI('json')
 parse_timestamp = function(timestamp)
   if not timestamp then return 0 end 
   local year,month,day,hour,minute,second = string.match(timestamp, '(%d+)-(%d+)-(%d+)T(%d+):(%d+):(%d+)Z')
-  print(timestamp)
-  print(year)
-  print(month)
-  print(day)
-  print(hour)
-  print(minute)
-  print(second)
   local integer_time = (tonumber(year) * 31556926) + (tonumber(month) * 2629743) + (tonumber(day) * 86400) + (tonumber(hour) * 3600) + (tonumber(minute) * 60) + tonumber(second)
   return tonumber(integer_time)
 end
@@ -96,10 +89,10 @@ api_request = function(url, headers, params)
       resp_text = response
       requesting = false
     elseif event == 'http_failure' then
-      print(text)
+      print('failure: ' .. tostring(text))
       error('git request failed. ')
     else
-      print(event)
+      --print(event)
     end
   end
   return resp_text
@@ -110,22 +103,19 @@ download_git_index = function()
     local url = get_repo_val('commits_url') 
     if url == nil then error('url was nil') end
     local formatted_url = string.sub(url,1,string.len(url) - 6)
-    print(formatted_url)
     commits = json.decode(api_request(formatted_url))
     for _, c in pairs(commits) do
       if c then
-        if not c.sha or not commit_cache or not commit_cache[c.sha] then 
+        if c.sha and commit_cache and not commit_cache[c.sha] then 
           commit_cache[c.sha] = {}
-          commit_cache[c.sha].date = parse_timestamp(c.commit.date)
+          commit_cache[c.sha].date = parse_timestamp(c.commit.author.date)
           local temp_table = json.decode(api_request(formatted_url .. "/" .. c.sha))
           commit_cache[c.sha].files = {}
           for _, file in pairs(temp_table.files) do
             if file.status == 'added' or file.status == 'modified' then
               commit_cache[c.sha].files[file.sha] = file.filename
-              local ts = parse_timestamp(c.commit.date)
-              if not latest_files[file.filename] then
-                latest_files[file.filename] = ts
-              elseif compare_timestamp(ts, latest_files[file.filename]) then
+              local ts = parse_timestamp(c.commit.author.date)
+              if not latest_files[file.filename] or compare_timestamp(ts, latest_files[file.filename]) then
                 latest_files[file.filename] = ts
               end
             end
@@ -159,7 +149,8 @@ sync_repo = function()
     local index = download_git_index()
     for filename, timestamp in pairs(index) do
       if not fs.exists(filename) or not check_version(filename) then
-        download_git_file(filename)
+        print('sync_repo check' .. filename .. " " .. tostring(fs.exists(filename)) .. " " .. tostring(check_version(filename)))
+        --download_git_file(filename)
       end
     end
 end
@@ -168,14 +159,17 @@ check_version = function(local_file)
   local is_up_to_date = false
   for _,commit in pairs(commit_cache) do
     if commit.files[local_file] then
-      is_up_to_date = compare_timestamp(get_file_timestamp(local_file), parse_timestamp(commit.commit.date))
+      local t = compare_timestamp(parse_timestamp(commit.commit.date), get_file_stamp(local_file))
+      print('timestamp checking' .. tostring(is_up_to_date) .. " " .. tostring(t))
+      is_up_to_date = is_up_to_date or t
     end
   end
   return is_up_to_date
 end
 
 compare_timestamp = function(stamp1, stamp2)
-  if tonumber(stamp1) >= tonumber(stamp2) then
+  print(stamp1 .. "stamp" .. stamp2)
+  if tonumber(stamp1) > tonumber(stamp2) then
     return true
   else
     return false
@@ -184,8 +178,8 @@ end
 
 get_file_stamp = function(file)
   local timestamp = 0
-  if fs.exists('commits.sav') then
-    local file = fs.open('commits.sav', 'r')
+  if fs.exists(file) then
+    local file = fs.open(file, 'r')
     local data = file.readLine()
     timestamp = tonumber(string.match(data, '--(%d+)'))
   end
@@ -198,6 +192,12 @@ save_data = function()
   local file = fs.open('commits.sav', 'w')
   file.write(data)
   file.close()
+
+  local data = textutils.serializeJSON(latest_files)
+  if fs.exists('files.sav') then fs.delete('files.sav') end
+  local file = fs.open('files.sav', 'w')
+  file.write(data)
+  file.close()
 end
 
 load_data = function()
@@ -205,6 +205,12 @@ load_data = function()
     local file = fs.open('commits.sav', 'r')
     local data = json.decode(file.readAll())
     if data then commit_cache = data end 
+    file.close()
+  end
+  if fs.exists('files.sav') then
+    local file = fs.open('files.sav', 'r')
+    local data = json.decode(file.readAll())
+    if data then latest_files = data end
     file.close()
   end
 end
